@@ -8,7 +8,7 @@ const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
     const user = await User.create({ name, email, password });
-    res.status(201).json({ id: user.id, name: user.name, email: user.email });
+    res.status(201).json({ uuid: user.uuid, name: user.name, email: user.email });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -23,13 +23,13 @@ const login = async (req, res) => {
     return res.status(401).json({ error: 'Credenciales inválidas' });
   }
 
-  const accessToken = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  const accessToken = jwt.sign({ uuid: user.uuid, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   res.json({ accessToken });
 };
 
 // Obtener perfil (requiere JWT)
 const getProfile = async (req, res) => {
-  const user = await User.findByPk(req.user.id, { attributes: { exclude: ['password'] } });
+  const user = await User.findByPk(req.user.uuid, { attributes: { exclude: ['password'] } });
   res.json(user);
 };
 
@@ -37,7 +37,7 @@ const getProfile = async (req, res) => {
 const updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    const user = await User.findByPk(req.user.id);
+    const user = await User.findByPk(req.user.uuid);
 
     if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
       return res.status(401).json({ error: 'Contraseña actual incorrecta' });
@@ -62,7 +62,7 @@ const requestPasswordReset = async (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    const resetToken = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '15m' });
+    const resetToken = jwt.sign({ uuid: user.uuid, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '15m' });
     // En producción, aquí enviarías el token por email
     res.json({ 
       message: 'Si el email existe, se enviarán instrucciones',
@@ -79,7 +79,7 @@ const resetPassword = async (req, res) => {
     const { token, newPassword } = req.body;
     
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findByPk(decoded.id);
+    const user = await User.findByPk(decoded.uuid);
 
     if (!user) {
       return res.status(404).json({ error: 'Usuario no encontrado' });

@@ -1,6 +1,7 @@
 import swaggerJSDoc from 'swagger-jsdoc';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import schemas from './swaggerSchemas.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -20,6 +21,7 @@ const options = {
           bearerFormat: 'JWT',
         },
       },
+      schemas: schemas
     },
     security: [{ bearerAuth: [] }],
   },

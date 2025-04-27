@@ -4,6 +4,7 @@ import swaggerUI from "swagger-ui-express";
 import swaggerSpec from "./src/docs/swagger.js";
 import { PORT } from "./src/config/envs.js";
 import userRouter from "./src/routes/userRoutes.js";
+import deviceRouter from "./src/routes/deviceRoutes.js";
 
 const app = express();
 
@@ -16,6 +17,7 @@ app.use('/api-doc', swaggerUI.serve, swaggerUI.setup(swaggerSpec));
 
 // Rutas
 app.use('/api/user', userRouter);
+app.use('/api/device', deviceRouter);
 
 // Iniciar servidor
 app.listen(PORT, () => {
