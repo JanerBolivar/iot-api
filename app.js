@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import swaggerUI from "swagger-ui-express";
 import swaggerSpec from "./src/docs/swagger.js";
-import { PORT } from "./src/config/envs.js";
+import { PORT, BASE_URL } from "./src/config/envs.js";
 import userRouter from "./src/routes/userRoutes.js";
 import deviceRouter from "./src/routes/deviceRoutes.js";
 
@@ -21,6 +21,5 @@ app.use('/api/device', deviceRouter);
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`Servidor en http://localhost:${PORT}`);
-  console.log(`Swagger UI en http://localhost:${PORT}/api-doc`);
+  console.log(`Swagger UI en ${BASE_URL}`);
 });
