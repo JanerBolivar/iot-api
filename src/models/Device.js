@@ -21,7 +21,8 @@ const Device = sequelize.define('Device', {
   },
   token: {
     type: DataTypes.STRING(64),
-    unique: true
+    unique: true,
+    allowNull: false
   },
   ownerId: {
     type: DataTypes.UUID,
@@ -33,8 +34,10 @@ const Device = sequelize.define('Device', {
   }
 }, {
   hooks: {
-    beforeCreate: (device) => {
+    beforeValidate: (device) => {
+      if (!device.token) {
         device.token = crypto.randomBytes(32).toString('hex');
+      }
     }
   }
 });

@@ -14,9 +14,8 @@ const checkOwnership = async (req, res, next) => {
 // Crear dispositivo (asociado al usuario logueado)
 const createDevice = async (req, res) => {
   try {
-    // Verificación adicional
     if (!req.user?.uuid) {
-      return res.status(400).json({ error: "Usuario no identificado correctamente" });
+      return res.status(400).json({ error: "Usuario no identificado" });
     }
 
     const device = await Device.create({
@@ -28,11 +27,12 @@ const createDevice = async (req, res) => {
     res.status(201).json({
       uuid: device.uuid,
       name: device.name,
+      token: device.token,
       status: device.status,
       createdAt: device.createdAt
     });
   } catch (error) {
-    console.error("Error detallado:", error);
+    console.error("Error al crear dispositivo:", error);
     res.status(400).json({
       error: "Error al crear dispositivo",
       details: error.errors?.map(e => e.message) || error.message
@@ -42,11 +42,23 @@ const createDevice = async (req, res) => {
 
 // Obtener todos los dispositivos del usuario
 const getUserDevices = async (req, res) => {
-  const devices = await Device.findAll({
-    where: { ownerId: req.user.uuid },
-    attributes: { exclude: ['token'] }
-  });
-  res.json(devices);
+  try {
+    const devices = await Device.findAll({
+      where: { ownerId: req.user.uuid }
+    });
+    
+    if (!devices || devices.length === 0) {
+      return res.status(404).json({ message: 'No se encontraron dispositivos' });
+    }
+    
+    res.json(devices);
+  } catch (error) {
+    console.error("Error al obtener dispositivos:", error);
+    res.status(500).json({ 
+      error: "Error del servidor",
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 };
 
 // Actualizar dispositivo
