@@ -19,8 +19,5 @@ export const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 // Puerto del servidor
 export const PORT = process.env.PORT || 3000;
 
-// Puerto del servidor WebSocket
-export const WS_PORT = process.env.WS_PORT || 8080;
-
 // URL base del servidor
 export const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
