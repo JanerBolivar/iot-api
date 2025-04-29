@@ -2,240 +2,343 @@ import jwt from 'jsonwebtoken';
 import Device from '../models/Device.js';
 import DeviceData from '../models/DeviceData.js';
 import { JWT_SECRET } from '../config/envs.js';
+import WebSocket from 'ws';
 
-// Map<deviceUuid, { device: DeviceInfo, connections: Set<WebSocket> }>
-const deviceChannels = new Map();
+// Expresión regular para validar UUID v4
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// Map<deviceUuid, Set<WebSocket>> - Para conexiones de dashboard por dispositivo
-const dashboardChannels = new Map();
+// Estructuras de datos mejoradas
+const deviceConnections = new Map(); // Map<deviceUuid, Set<WebSocket>>
+const dashboardSubscriptions = new Map(); // Map<deviceUuid, Set<WebSocket>>
+const globalDashboards = new Set(); // Para dashboards que monitorean todos los dispositivos
 
-// Set global para todos los dashboards (para mensajes globales)
-const allDashboards = new Set();
-
-// Manejo de conexiones de dispositivos - Autenticación dual (token + uuid)
-export const deviceHandler = async (ws, req, deviceUuid = null) => {
-  const token = req.headers['device-token'];
-  
-  if (!token) {
-    return ws.close(4003, 'Token de dispositivo requerido');
-  }
-  
+// Handler de dispositivos (ahora requiere UUID en URL)
+export const deviceHandler = async (ws, req) => {
   try {
-    let device = null;
-    
-    // Si se proporciona un UUID en la ruta, verificamos que coincida con el token
-    if (deviceUuid) {
-      device = await Device.findOne({
-        where: { uuid: deviceUuid, token },
-        attributes: ['uuid', 'name', 'ownerId']
-      });
-      
-      if (!device) {
-        return ws.close(4003, 'UUID o token de dispositivo no válido');
-      }
-    } 
-    // Si no hay UUID en la ruta, buscamos el dispositivo solo por el token
-    else {
-      device = await Device.findOne({
-        where: { token },
-        attributes: ['uuid', 'name', 'ownerId']
-      });
-      
-      if (!device) {
-        return ws.close(4003, 'Dispositivo no autorizado');
-      }
+    // Extraer UUID de la URL
+    const deviceUuid = extractUuidFromRequest(req);
+    if (!deviceUuid) {
+      return ws.close(4004, 'UUID de dispositivo requerido en la URL');
     }
-    
-    // Inicializar el canal si no existe
-    if (!deviceChannels.has(device.uuid)) {
-      deviceChannels.set(device.uuid, {
-        device: {
-          uuid: device.uuid,
-          name: device.name,
-          ownerId: device.ownerId
-        },
-        connections: new Set()
-      });
+
+    // Validar formato UUID
+    if (!UUID_REGEX.test(deviceUuid)) {
+      return ws.close(4004, 'Formato de UUID inválido');
     }
-    
-    // Añadir esta conexión al canal del dispositivo
-    const channel = deviceChannels.get(device.uuid);
-    channel.connections.add(ws);
-    
-    console.log(`Dispositivo conectado: ${device.name} (${device.uuid})`);
-    
-    ws.on('message', async (message) => {
-      try {
-        const { data, save } = JSON.parse(message);
-        
-        // Validación y procesamiento...
-        if (save) {
-          await DeviceData.create({
-            type: data.type,
-            value: data.value,
-            valve: data.valve || null,
-            deviceUuid: device.uuid
-          });
-        }
-        
-        // Broadcast a dashboards suscritos a este dispositivo específico
-        const broadcastMsg = JSON.stringify({
-          device: { uuid: device.uuid, name: device.name },
-          data,
-          timestamp: new Date().toISOString(),
-          saved: save
-        });
-        
-        // Enviar a dashboards suscritos a este dispositivo
-        if (dashboardChannels.has(device.uuid)) {
-          dashboardChannels.get(device.uuid).forEach(client => {
-            if (client.readyState === client.OPEN) {
-              client.send(broadcastMsg);
-            }
-          });
-        }
-        
-        // También enviar a todos los dashboards que están suscritos a todos los dispositivos
-        allDashboards.forEach(client => {
-          if (client.readyState === client.OPEN) {
-            client.send(broadcastMsg);
-          }
-        });
-        
-        ws.send(JSON.stringify({ status: 'OK', saved: save }));
-      } catch (error) {
-        console.error('Error procesando mensaje:', error);
-        ws.send(JSON.stringify({ error: 'Formato de mensaje inválido' }));
-      }
+
+    // Verificar token de dispositivo
+    const token = req.headers['device-token'];
+    if (!token) {
+      return ws.close(4003, 'Token de dispositivo requerido');
+    }
+
+    // Buscar dispositivo en BD
+    const device = await Device.findOne({
+      where: { uuid: deviceUuid, token },
+      attributes: ['uuid', 'name', 'ownerId', 'status']
     });
-    
-    ws.on('close', () => {
-      if (deviceChannels.has(device.uuid)) {
-        deviceChannels.get(device.uuid).connections.delete(ws);
-        
-        // Si no quedan conexiones, podríamos eliminar el canal
-        //if (deviceChannels.get(device.uuid).connections.size === 0) {
-          // deviceChannels.delete(device.uuid);
-        //}
-      }
-      
-      console.log(`Dispositivo desconectado: ${device.uuid}`);
-    });
+
+    if (!device) {
+      return ws.close(4003, 'Dispositivo no autorizado');
+    }
+
+    // Registrar conexión
+    if (!deviceConnections.has(deviceUuid)) {
+      deviceConnections.set(deviceUuid, new Set());
+    }
+    deviceConnections.get(deviceUuid).add(ws);
+
+    // Configurar handlers de mensajes
+    ws.on('message', (message) => handleDeviceMessage(device)(message, ws));
+    ws.on('close', handleDeviceDisconnection(deviceUuid, ws));
+    ws.on('error', handleDeviceError(deviceUuid));
+
+    // Notificar a los dashboards que el dispositivo se ha conectado
+    broadcastDeviceStatus(deviceUuid, device.name, 'connected');
+
   } catch (error) {
-    console.error('Error en conexión WebSocket de dispositivo:', error);
+    console.error(`Error en conexión de dispositivo: ${error.message}`);
     ws.close(4005, 'Error de servidor');
   }
 };
 
-// Manejo de dashboards - Autenticación por JWT de usuario 
-export const handleDashboardConnection = (ws, req, deviceUuid = null) => {
+// Handler de dashboards (ahora requiere UUID en URL)
+export const dashboardHandler = async (ws, req) => {
   try {
-    // Extrae el token del header 'Authorization' (ej: "Bearer <token>")
+    // Verificar autenticación JWT
     const authHeader = req.headers['authorization'];
-    if (!authHeader) throw new Error('Token de autorización no proporcionado');
-    
-    const token = authHeader.split(' ')[1];
-    if (!token) throw new Error('Formato de token inválido');
-    
-    // Verifica el token JWT del usuario
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Si se proporciona un UUID de dispositivo, suscribimos solo a ese canal
-    if (deviceUuid) {
-      // Verificar que el dispositivo existe
-      Device.findOne({ where: { uuid: deviceUuid } })
-        .then(device => {
-          if (!device) {
-            ws.send(JSON.stringify({
-              type: 'ERROR',
-              message: 'Dispositivo no encontrado'
-            }));
-            return;
-          }
-
-          // Verificar que el usuario tiene acceso a este dispositivo
-          if (device.ownerId !== decoded.uuid) {
-            ws.send(JSON.stringify({
-              type: 'ERROR',
-              message: 'No tienes permisos para acceder a este dispositivo'
-            }));
-            return;
-          }
-          
-          // Inicializar el canal si no existe
-          if (!dashboardChannels.has(deviceUuid)) {
-            dashboardChannels.set(deviceUuid, new Set());
-          }
-          
-          // Añadir esta conexión al canal del dashboard para este dispositivo
-          dashboardChannels.get(deviceUuid).add(ws);
-          
-          console.log(`Dashboard conectado al dispositivo: ${deviceUuid} (Usuario ID: ${decoded.uuid})`);
-          
-          ws.send(JSON.stringify({
-            type: 'CONNECTION_ACK',
-            message: `Suscrito al dispositivo ${deviceUuid}`,
-            deviceUuid,
-            userId: decoded.uuid
-          }));
-        })
-        .catch(error => {
-          console.error('Error verificando dispositivo:', error);
-          ws.send(JSON.stringify({
-            type: 'ERROR',
-            message: 'Error verificando dispositivo'
-          }));
-        });
-    } 
-    // Si no hay UUID, lo añadimos al canal global (recibe datos de todos los dispositivos)
-    else {
-      allDashboards.add(ws);
-      console.log(`Dashboard conectado a todos los dispositivos (Usuario ID: ${decoded.uuid})`);
-      
-      ws.send(JSON.stringify({
-        type: 'CONNECTION_ACK',
-        message: 'Conexión autorizada - Recibiendo datos de todos los dispositivos',
-        userId: decoded.uuid
-      }));
+    if (!authHeader) {
+      return ws.close(4001, 'Token de autorización requerido');
     }
-    
-    ws.on('close', () => {
-      // Eliminar de canales específicos
-      if (deviceUuid && dashboardChannels.has(deviceUuid)) {
-        dashboardChannels.get(deviceUuid).delete(ws);
-        
-        // Si no quedan conexiones, podríamos eliminar el canal
-        //if (dashboardChannels.get(deviceUuid).size === 0) {
-          // dashboardChannels.delete(deviceUuid);
-        //}
+
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return ws.close(4001, 'Formato de token inválido (usar "Bearer <token>")');
+    }
+
+    // Verificar token JWT
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const path = req.url.split('?')[0];
+
+    if (path.startsWith('/dashboard/device/')) {
+      await handleSpecificDeviceSubscription(ws, req, decoded);
+    } else {
+      return ws.close(4004, 'Ruta no válida. Use /dashboard/device/:uuid');
+    }
+
+    // Configurar handlers de cierre
+    ws.on('close', handleDashboardDisconnection(ws));
+    ws.on('error', handleDashboardError());
+
+    // Enviar últimos datos del dispositivo al dashboard como inicio
+    if (path.startsWith('/dashboard/device/')) {
+      const deviceUuid = extractUuidFromRequest(req);
+      if (deviceUuid) {
+        sendLatestDeviceData(ws, deviceUuid);
       }
-      
-      // Eliminar del canal global
-      allDashboards.delete(ws);
-      
-      console.log(`Dashboard desconectado ${deviceUuid ? `del dispositivo ${deviceUuid}` : 'del canal global'}`);
-    });
+    }
+
   } catch (error) {
-    console.error('Error en autenticación del dashboard:', error.message);
+    console.error(`Error en conexión de dashboard: ${error.message}`);
     ws.close(4001, 'No autorizado');
   }
 };
 
-// Función para enviar comandos a un dispositivo específico
-export const sendDeviceCommand = (deviceUuid, command) => {
-  if (!deviceChannels.has(deviceUuid)) {
-    return false;
+// Funciones auxiliares
+
+function handleDeviceError(deviceUuid) {
+  return (error) => {
+    console.error(`Error en conexión con dispositivo ${deviceUuid}:`, error.message);
+  };
+}
+
+function handleDashboardError() {
+  return (error) => {
+    console.error(`Error en conexión con dashboard:`, error.message);
+  };
+}
+
+function extractUuidFromRequest(req) {
+  const match = req.url.match(/\/([0-9a-f-]{36})/);
+  return match ? match[1] : null;
+}
+
+function handleDeviceMessage(device) {
+  return async (message, ws) => {
+    try {
+      let parsedMessage;
+      try {
+        parsedMessage = JSON.parse(message);
+      } catch (e) {
+        throw new Error(`Error al parsear JSON: ${e.message}`);
+      }
+
+      const { data, save } = parsedMessage;
+
+      if (!data) {
+        throw new Error('Mensaje sin datos');
+      }
+
+      // Guardar en BD si es necesario
+      if (save) {
+        await DeviceData.create({
+          type: data.type || 'unknown',
+          value: data.value !== undefined ? data.value : null,
+          valve: data.valve || null,
+          deviceUuid: device.uuid
+        });
+      }
+
+      // Preparar mensaje de broadcast
+      const broadcastMsg = JSON.stringify({
+        event: 'device_update',
+        device: { uuid: device.uuid, name: device.name },
+        data,
+        timestamp: new Date().toISOString(),
+        save: save
+      });
+
+      // Enviar a suscriptores
+      broadcastToSubscribers(device.uuid, broadcastMsg);
+
+      // Confirmación al dispositivo
+      ws.send(JSON.stringify({
+        status: 'OK',
+        messageId: Date.now(),
+        saved: save
+      }));
+
+    } catch (error) {
+      console.error(`Error procesando mensaje del dispositivo ${device.uuid}:`, error);
+      ws.send(JSON.stringify({
+        error: 'Error procesando mensaje',
+        details: error.message
+      }));
+    }
+  };
+}
+
+function broadcastToSubscribers(deviceUuid, message) {
+  // Suscriptores específicos del dispositivo
+  if (dashboardSubscriptions.has(deviceUuid)) {
+    dashboardSubscriptions.get(deviceUuid).forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+        console.log(`Mensaje enviado a suscriptor específico para ${deviceUuid}`);
+      } else {
+        console.warn(`Cliente websocket para ${deviceUuid} no está abierto. Estado: ${client.readyState}`);
+      }
+    });
   }
-  
-  const channel = deviceChannels.get(deviceUuid);
-  let sentToAny = false;
-  
-  channel.connections.forEach(ws => {
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify(command));
-      sentToAny = true;
+}
+
+function broadcastDeviceStatus(deviceUuid, deviceName, status) {
+  const statusMessage = JSON.stringify({
+    event: 'device_status',
+    device: { uuid: deviceUuid, name: deviceName },
+    status,
+    timestamp: new Date().toISOString()
+  });
+
+  broadcastToSubscribers(deviceUuid, statusMessage);
+}
+
+async function handleSpecificDeviceSubscription(ws, req, user) {
+  const deviceUuid = extractUuidFromRequest(req);
+
+  if (!deviceUuid) {
+    return ws.close(4004, 'UUID de dispositivo requerido');
+  }
+
+  // Verificar que el dispositivo existe y pertenece al usuario
+  const device = await Device.findOne({
+    where: { uuid: deviceUuid },
+    attributes: ['uuid', 'name', 'ownerId']
+  });
+
+  if (!device) {
+    return ws.close(404, 'Dispositivo no encontrado');
+  }
+
+  if (device.ownerId !== user.uuid) {
+    return ws.close(403, 'No tienes permisos para este dispositivo');
+  }
+
+  // Registrar suscripción
+  if (!dashboardSubscriptions.has(deviceUuid)) {
+    dashboardSubscriptions.set(deviceUuid, new Set());
+  }
+  dashboardSubscriptions.get(deviceUuid).add(ws);
+
+  console.log(`Dashboard suscrito a dispositivo: ${deviceUuid} (Usuario: ${user.uuid})`);
+
+  // Enviar confirmación
+  ws.send(JSON.stringify({
+    type: 'subscription_ack',
+    status: 'subscribed',
+    device: {
+      uuid: device.uuid,
+      name: device.name
+    },
+    timestamp: new Date().toISOString()
+  }));
+}
+
+// Funciones de limpieza
+function handleDeviceDisconnection(deviceUuid, ws) {
+  return () => {
+    if (deviceConnections.has(deviceUuid)) {
+      deviceConnections.get(deviceUuid).delete(ws);
+
+      // Limpiar si no hay más conexiones
+      if (deviceConnections.get(deviceUuid).size === 0) {
+        deviceConnections.delete(deviceUuid);
+
+        // Notificar a los dashboards que el dispositivo se ha desconectado
+        const device = Device.findOne({ where: { uuid: deviceUuid } });
+        if (device) {
+          broadcastDeviceStatus(deviceUuid, device.name, 'disconnected');
+        }
+      }
+    }
+    console.log(`Dispositivo desconectado: ${deviceUuid}`);
+  };
+}
+
+function handleDashboardDisconnection(ws) {
+  return () => {
+    // Eliminar de suscripciones específicas
+    dashboardSubscriptions.forEach((subs, deviceUuid) => {
+      if (subs.has(ws)) {
+        subs.delete(ws);
+        console.log(`Dashboard eliminado de suscripciones para dispositivo: ${deviceUuid}`);
+        if (subs.size === 0) {
+          dashboardSubscriptions.delete(deviceUuid);
+        }
+      }
+    });
+  };
+}
+
+// Función para enviar comandos
+export const sendDeviceCommand = (deviceUuid, command) => {
+  if (!deviceConnections.has(deviceUuid)) {
+    throw new Error(`Dispositivo ${deviceUuid} no conectado`);
+  }
+
+  const connections = deviceConnections.get(deviceUuid);
+  const results = [];
+
+  connections.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({
+          ...command,
+          messageId: Date.now(),
+          timestamp: new Date().toISOString()
+        }));
+        results.push({ success: true });
+      } catch (error) {
+        results.push({ success: false, error: error.message });
+      }
     }
   });
-  
-  return sentToAny;
+
+  return results;
 };
+
+// Función para enviar los últimos datos del dispositivo al dashboard
+async function sendLatestDeviceData(ws, deviceUuid) {
+  try {
+    // Obtener los últimos datos del dispositivo (por ejemplo, los últimos 10)
+    const latestData = await DeviceData.findAll({
+      where: { deviceUuid },
+      limit: 10,
+      order: [['createdAt', 'DESC']]
+    });
+
+    // Obtener información del dispositivo
+    const device = await Device.findOne({
+      where: { uuid: deviceUuid },
+      attributes: ['uuid', 'name']
+    });
+
+    if (!device) return;
+
+    // Enviar datos históricos
+    if (latestData.length > 0) {
+      ws.send(JSON.stringify({
+        event: 'historical_data',
+        device: { uuid: device.uuid, name: device.name },
+        data: latestData,
+        timestamp: new Date().toISOString()
+      }));
+      console.log(`Enviados ${latestData.length} registros históricos al dashboard para dispositivo ${deviceUuid}`);
+    } else {
+      console.log(`No hay datos históricos para enviar al dispositivo ${deviceUuid}`);
+    }
+  } catch (error) {
+    console.error(`Error al enviar datos históricos para dispositivo ${deviceUuid}:`, error);
+  }
+}
