@@ -22,7 +22,7 @@ app.use(cors());
 app.use(express.json());
 
 // Swagger UI
-app.use('/api-doc', swaggerUI.serve, swaggerUI.setup(swaggerSpec));
+app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(swaggerSpec));
 
 // Rutas HTTP
 app.use('/api/user', userRouter);

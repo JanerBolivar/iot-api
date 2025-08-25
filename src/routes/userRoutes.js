@@ -1,8 +1,20 @@
 import { Router } from 'express';
-import userController from '../controllers/userController.js';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import {
+    register,
+    login,
+    getProfile,
+    updatePassword,
+    requestPasswordReset,
+    resetPassword,
+    getAllUsers,
+    getUserById,
+    updateUser,
+    deleteUser,
+    activateUser
+} from '../controllers/userController.js';
+import { protect, authorize } from '../middlewares/authMiddleware.js';
 
-const userRouter = Router();
+const router = Router();
 
 /**
  * @swagger
@@ -17,17 +29,24 @@ const userRouter = Router();
  *           schema:
  *             type: object
  *             properties:
- *               name:
+ *               first_name:
  *                 type: string
+ *                 example: "Juan"
+ *               last_name:
+ *                 type: string
+ *                 example: "Pérez"
  *               email:
  *                 type: string
+ *                 example: "juan.perez@example.com"
  *               password:
  *                 type: string
+ *                 format: password
+ *                 example: "password123"
  *     responses:
  *       201:
  *         description: Usuario registrado
  */
-userRouter.post('/register', userController.register);
+router.post('/register', register);
 
 /**
  * @swagger
@@ -50,7 +69,84 @@ userRouter.post('/register', userController.register);
  *       200:
  *         description: Token JWT generado
  */
-userRouter.post('/login', userController.login);
+router.post('/login', login);
+
+/**
+ * @swagger
+ * /api/user/request-password-reset:
+ *   post:
+ *     summary: Solicitar recuperación de contraseña
+ *     tags: [Users]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Email del usuario
+ *                 example: "usuario@example.com"
+ *     responses:
+ *       200:
+ *         description: Si el email existe, se enviarán instrucciones
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 resetToken:
+ *                   type: string
+ *                   description: Solo en desarrollo - token para resetear
+ *       404:
+ *         description: Usuario no encontrado
+ */
+router.post('/request-password-reset', requestPasswordReset);
+
+/**
+ * @swagger
+ * /api/user/reset-password:
+ *   post:
+ *     summary: Restablecer contraseña con token válido
+ *     tags: [Users]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - token
+ *               - newPassword
+ *             properties:
+ *               token:
+ *                 type: string
+ *                 description: Token recibido por email
+ *               newPassword:
+ *                 type: string
+ *                 format: password
+ *                 description: Nueva contraseña
+ *                 example: "newSecurePassword456"
+ *     responses:
+ *       200:
+ *         description: Contraseña restablecida exitosamente
+ *       401:
+ *         description: Token expirado o inválido
+ *       400:
+ *         description: Error en la solicitud
+ */
+router.post('/reset-password', resetPassword);
+
+
+// Middleware de protección
+router.use(protect);
+
 
 /**
  * @swagger
@@ -64,7 +160,7 @@ userRouter.post('/login', userController.login);
  *       200:
  *         description: Perfil del usuario
  */
-userRouter.get('/profile', authMiddleware, userController.getProfile);
+router.get('/profile', getProfile);
 
 /**
  * @swagger
@@ -109,78 +205,130 @@ userRouter.get('/profile', authMiddleware, userController.getProfile);
  *       400:
  *         description: Error en la solicitud
  */
-userRouter.put('/update-password', authMiddleware, userController.updatePassword);
+router.put('/update-password', updatePassword);
+
+
+// Middleware de autorización
+router.use(authorize('admin'));
+
+// Rutas de administración
+/**
+ * @swagger
+ * /api/user/users:
+ *   get:
+ *     summary: Obtener todos los usuarios
+ *     tags: [Admin]
+ *     responses:
+ *       200:
+ *         description: Lista de usuarios
+ */
+router.get('/users', getAllUsers);
 
 /**
  * @swagger
- * /api/user/request-password-reset:
- *   post:
- *     summary: Solicitar recuperación de contraseña
- *     tags: [Users]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *                 description: Email del usuario
- *                 example: "usuario@example.com"
+ * /api/user/{id}:
+ *   get:
+ *     summary: Obtener usuario por ID
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID del usuario
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
- *         description: Si el email existe, se enviarán instrucciones
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                 resetToken:
- *                   type: string
- *                   description: Solo en desarrollo - token para resetear
+ *         description: Usuario encontrado
  *       404:
  *         description: Usuario no encontrado
  */
-userRouter.post('/request-password-reset', userController.requestPasswordReset);
+router.get('/:id', getUserById);
 
 /**
  * @swagger
- * /api/user/reset-password:
- *   post:
- *     summary: Restablecer contraseña con token válido
- *     tags: [Users]
+ * /api/user/{id}:
+ *   put:
+ *     summary: Actualizar usuario por ID
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID del usuario
+ *         schema:
+ *           type: string
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - token
- *               - newPassword
  *             properties:
- *               token:
+ *               first_name:
  *                 type: string
- *                 description: Token recibido por email
- *               newPassword:
+ *                 example: "Juan"
+ *               last_name:
  *                 type: string
- *                 format: password
- *                 description: Nueva contraseña
- *                 example: "newSecurePassword456"
+ *                 example: "Pérez"
+ *               email:
+ *                 type: string
+ *                 example: "juan.perez@example.com"
+ *               role:
+ *                 type: string
+ *                 example: "admin"
+ *               status:
+ *                 type: boolean
+ *                 example: true
  *     responses:
  *       200:
- *         description: Contraseña restablecida exitosamente
- *       401:
- *         description: Token expirado o inválido
- *       400:
- *         description: Error en la solicitud
+ *         description: Usuario actualizado
+ *       404:
+ *         description: Usuario no encontrado
  */
-userRouter.post('/reset-password', userController.resetPassword);
+router.put('/:id', updateUser);
 
-export default userRouter;
+/**
+ * @swagger
+ * /api/user/{id}:
+ *   delete:
+ *     summary: Eliminar usuario por ID
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID del usuario
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Usuario eliminado
+ *       404:
+ *         description: Usuario no encontrado
+ */
+router.delete('/:id', deleteUser);
+
+/**
+ * @swagger
+ * /api/user/{id}/activate:
+ *   patch:
+ *     summary: Activar usuario por ID
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID del usuario
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Usuario activado
+ *       404:
+ *         description: Usuario no encontrado
+ */
+router.patch('/:id/activate', activateUser);
+
+
+export default router;

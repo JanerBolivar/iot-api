@@ -9,9 +9,18 @@ const User = sequelize.define('User', {
     primaryKey: true,
     allowNull: false
   },
-  name: {
+  first_name: {
     type: DataTypes.STRING,
     allowNull: false,
+  },
+  last_name: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  role: {
+    type: DataTypes.ENUM('admin', 'user'),
+    defaultValue: 'user',
+    allowNull: false
   },
   email: {
     type: DataTypes.STRING,
@@ -30,6 +39,11 @@ const User = sequelize.define('User', {
       const hash = bcrypt.hashSync(value, 10);
       this.setDataValue('password', hash);
     }
+  },
+  status: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    allowNull: false
   }
 });
 
