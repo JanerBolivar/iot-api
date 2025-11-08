@@ -15,6 +15,16 @@ const Device = sequelize.define('Device', {
       len: [3, 50]
     }
   },
+  location: {
+    type: DataTypes.JSON,
+    allowNull: false,
+    defaultValue: {
+      bloque: null,
+      piso: null,
+      laboratorio: null,
+      ubicacion: null
+    }
+  },
   status: {
     type: DataTypes.BOOLEAN,
     defaultValue: false

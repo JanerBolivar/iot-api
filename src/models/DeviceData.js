@@ -8,7 +8,7 @@ const DeviceData = sequelize.define('DeviceData', {
     primaryKey: true
   },
   type: {
-    type: DataTypes.STRING,
+    type: DataTypes.ENUM('Level', 'Valve'),
     allowNull: false
   },
   valve: {
@@ -18,10 +18,6 @@ const DeviceData = sequelize.define('DeviceData', {
   value: {
     type: DataTypes.STRING,
     allowNull: false
-  },
-  saved: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
   },
   deviceUuid: {
     type: DataTypes.UUID,
@@ -34,7 +30,7 @@ const DeviceData = sequelize.define('DeviceData', {
 });
 
 // Asociación simplificada
-DeviceData.associate = function(models) {
+DeviceData.associate = function (models) {
   this.belongsTo(models.Device, {
     foreignKey: 'deviceUuid',
     targetKey: 'uuid',

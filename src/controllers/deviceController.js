@@ -20,6 +20,7 @@ const createDevice = async (req, res) => {
 
     const device = await Device.create({
       name: req.body.name,
+      location: req.body.location,
       status: req.body.status || true,
       ownerId: req.user.uuid
     });
@@ -27,6 +28,7 @@ const createDevice = async (req, res) => {
     res.status(201).json({
       uuid: device.uuid,
       name: device.name,
+      location: device.location,
       token: device.token,
       status: device.status,
       createdAt: device.createdAt
