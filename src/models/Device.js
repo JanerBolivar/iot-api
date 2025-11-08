@@ -23,6 +23,21 @@ const Device = sequelize.define('Device', {
       piso: null,
       laboratorio: null,
       ubicacion: null
+    },
+    get() {
+      const rawValue = this.getDataValue('location');
+      if (typeof rawValue === 'string') {
+        try {
+          return JSON.parse(rawValue);
+        } catch (e) {
+          console.error("Error al parsear JSON de 'location':", e);
+          return rawValue;
+        }
+      }
+      return rawValue;
+    },
+    set(value) {
+      this.setDataValue('location', JSON.stringify(value));
     }
   },
   status: {
